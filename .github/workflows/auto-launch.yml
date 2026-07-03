@@ -1,7 +1,7 @@
 name: PicklePlus Multi-Service Host Watch
 
 # Runs for just under GitHub Actions' 6-hour job limit.
-# During each run, config.example.json checks the PicklePlus API every 5 minutes:
+# During each run, the PicklePlus API is checked every 5 minutes:
 #   request_interval: 300
 #   max_attempts: 72
 
@@ -54,9 +54,9 @@ jobs:
 
       - name: Run PicklePlus multi-service host watcher
         env:
+          # Watcher settings only. Do not include Discord fields in this JSON.
+          CONFIG_JSON: ${{ secrets.CONFIG_JSON }}
+          # Discord settings are loaded only from separate secrets.
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_USER_ID: ${{ secrets.DISCORD_USER_ID }}
-          # Optional repository variable. Example:
-          # disneyplus-sharing=구 디즈니+ 프리미엄 파티장,millie=밀리의 서재 전자책 정기구독 파티장
-          PICKLEPLUS_SERVICES: ${{ vars.PICKLEPLUS_SERVICES }}
-        run: python run_alert_bot.py >/dev/null 2>&1
+        run: python run_alert_bot.py
