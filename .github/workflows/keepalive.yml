@@ -1,0 +1,32 @@
+name: Keepalive
+
+# Keeps this repository active so GitHub does not auto-disable scheduled workflows
+# after long repository inactivity. The empty commit changes no files.
+
+on:
+  schedule:
+    - cron: "30 3 */14 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Push empty commit to keep schedules active
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --allow-empty -m "chore: keepalive [skip ci]"
+          git push
