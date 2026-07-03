@@ -442,10 +442,17 @@ def run_loop(config: dict, log=None, stop_event=None) -> None:
                 result = run_check(alert)
             except Exception as error:
                 log(traceback.format_exc())
+                # 기본값에서는 네트워크/DNS/API 일시 오류를 Discord 알림으로 보내지 않는다.
+                # 이 봇의 목적은 "파티장 열림" 알림이므로, 오류 알림이 필요하면
+                # config에서 notify_errors=true로 켜면 된다.
+                if not config.get("notify_errors", False):
+                    log(f"ERROR [{name}] ignored: {error}")
+                    last_ok[name] = True
+                    continue
                 result = CheckResult(
                     name=name,
                     ok=False,
-                    title="Fatal check error",
+                    title="Check error",
                     detail=str(error),
                     target=alert.get("url", ""),
                 )

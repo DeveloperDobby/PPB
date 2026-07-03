@@ -6,6 +6,8 @@ import requests
 
 
 def mention(config: dict) -> str:
+    if not config.get("mention_each_message", True):
+        return ""
     user_id = (config.get("discord_user_id") or "").strip()
     return f"<@{user_id}> " if user_id else ""
 

@@ -1,17 +1,21 @@
 """Headless CLI runner for the PicklePlus Discord alert bot.
 
-Secrets handling for GitHub Actions:
-- DISCORD_WEBHOOK_URL is the only required secret.
-- DISCORD_USER_ID is optional.
-- PICKLEPLUS_SERVICES is an optional GitHub Variable, not a secret.
+Configuration policy for GitHub Actions:
+- CONFIG_JSON GitHub Secret is required.
+- CONFIG_JSON must contain watcher settings only. Discord values are ignored there.
+- The bot does not load config.json automatically.
+- GitHub Variables are not used.
+- DISCORD_WEBHOOK_URL is required as a separate GitHub Secret.
+- DISCORD_USER_ID is optional as a separate GitHub Secret.
 
 Usage:
-    python run_alert_bot.py [--config PATH] [--once]
+    CONFIG_JSON='{"services":[...]}' DISCORD_WEBHOOK_URL='...' python run_alert_bot.py [--once]
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -19,92 +23,68 @@ import alert_config
 import alert_core
 
 
-def _parse_services_env(raw: str) -> list[dict]:
-    """Parse compact service config from an environment variable.
-
-    Supported formats, separated by comma or newline:
-    - millie
-    - millie=밀리의 서재 전자책 정기구독 파티장
-    - millie|밀리의 서재 전자책 정기구독 파티장
-    - https://prd-main-api.pickle.plus/services/millie/group-subscription/status|밀리의 서재
-    """
-    services: list[dict] = []
-    if not raw:
-        return services
-
-    for item in raw.replace("\n", ",").split(","):
-        item = item.strip()
-        if not item:
-            continue
-
-        if "|" in item:
-            key, label = item.split("|", 1)
-        elif "=" in item:
-            key, label = item.split("=", 1)
-        else:
-            key, label = item, ""
-
-        key = key.strip()
-        label = label.strip()
-        if not key:
-            continue
-
-        if key.startswith("http://") or key.startswith("https://"):
-            service = {"status_url": key}
-        else:
-            service = {"slug": key}
-        if label:
-            service["service_name"] = label
-        services.append(service)
-
-    return services
+DISCORD_CONFIG_KEYS = {
+    "discord_webhook_url",
+    "discord_user_id",
+    "mention_each_message",
+}
 
 
-def load_or_create(config_path: str, log) -> dict:
-    if os.path.exists(config_path):
-        return alert_config.load_config(config_path)
-
-    if config_path == alert_config.CONFIG_PATH and os.path.exists(alert_config.TEMPLATE_CONFIG_PATH):
-        log(f"No config.json found. Loading {alert_config.TEMPLATE_CONFIG_FILENAME}.")
-        return alert_config.load_config(config_path)
-
-    log(
-        f"No config found at {config_path}. A template was created; "
-        "fill it in and run again."
-    )
-    alert_config.save_config(alert_config.default_config(), config_path)
-    return alert_config.load_config(config_path)
+def _remove_discord_keys(data: dict, log) -> dict:
+    cleaned = dict(data)
+    removed = sorted(key for key in DISCORD_CONFIG_KEYS if key in cleaned)
+    for key in removed:
+        cleaned.pop(key, None)
+    if removed:
+        log(
+            "Discord-related key(s) in CONFIG_JSON were ignored: "
+            + ", ".join(removed)
+        )
+    return cleaned
 
 
-def apply_env_overrides(config: dict, log) -> dict:
-    webhook = os.environ.get("DISCORD_WEBHOOK_URL")
-    if webhook is not None and webhook.strip():
-        config["discord_webhook_url"] = webhook.strip()
-        log("Discord webhook URL loaded from environment.")
+def load_required_config_from_secret(log) -> dict:
+    """Load watcher configuration from CONFIG_JSON. Discord keys are ignored."""
+    raw = os.environ.get("CONFIG_JSON", "")
+    if not raw.strip():
+        log("CONFIG_JSON secret is missing or empty. Bot will not start.")
+        raise RuntimeError("CONFIG_JSON secret is required")
 
-    user_id = os.environ.get("DISCORD_USER_ID")
-    if user_id is not None and user_id.strip():
-        config["discord_user_id"] = user_id.strip()
-        log("Discord user ID loaded from environment.")
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise ValueError(f"CONFIG_JSON is not valid JSON: {error}") from error
 
-    services_raw = os.environ.get("PICKLEPLUS_SERVICES")
-    if services_raw is not None and services_raw.strip():
-        services = _parse_services_env(services_raw)
-        if services:
-            config["services"] = services
-            config["alerts"] = []
-            log(f"PicklePlus services loaded from environment: {len(services)} service(s).")
+    if not isinstance(data, dict):
+        raise ValueError("CONFIG_JSON top-level value must be a JSON object.")
+
+    return alert_config.normalize_config(_remove_discord_keys(data, log))
+
+
+def apply_discord_secrets(config: dict, log) -> dict:
+    """Load Discord settings only from separate environment variables."""
+    webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+    if not webhook:
+        log("DISCORD_WEBHOOK_URL secret is missing or empty. Bot will not start.")
+        raise RuntimeError("DISCORD_WEBHOOK_URL secret is required")
+
+    config["discord_webhook_url"] = webhook
+    log("Discord webhook URL loaded from DISCORD_WEBHOOK_URL secret.")
+
+    user_id = os.environ.get("DISCORD_USER_ID", "").strip()
+    if user_id:
+        config["discord_user_id"] = user_id
+        log("Discord user ID loaded from DISCORD_USER_ID secret.")
+
+    # CONFIG_JSON cannot control Discord mention behavior.
+    # Mention is sent only when DISCORD_USER_ID is set.
+    config["mention_each_message"] = bool(user_id)
 
     return alert_config.normalize_config(config)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="PicklePlus Discord alert bot")
-    parser.add_argument(
-        "--config",
-        default=alert_config.CONFIG_PATH,
-        help="Path to config.json (default: next to this script; falls back to config.example.json)",
-    )
     parser.add_argument(
         "--once",
         action="store_true",
@@ -113,8 +93,13 @@ def main() -> None:
     args = parser.parse_args()
 
     log = alert_core.make_logger()
-    config = load_or_create(args.config, log)
-    config = apply_env_overrides(config, log)
+
+    try:
+        config = load_required_config_from_secret(log)
+        config = apply_discord_secrets(config, log)
+    except Exception as error:
+        log(f"Bot did not start: {error}")
+        sys.exit(1)
 
     if args.once:
         config["max_attempts"] = 1
