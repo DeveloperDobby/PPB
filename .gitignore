@@ -1,1 +1,6 @@
-
+logs/
+*.log
+__pycache__/
+*.py[cod]
+.env
+config.json
