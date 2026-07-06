@@ -7,8 +7,7 @@ name: PicklePlus Multi-Service Host Watch
 
 on:
   schedule:
-    # Every 6 hours at minute :17 UTC.
-    - cron: "17 */3 * * *"
+    - cron: "35 1-23/3 * * *"
   workflow_dispatch:
 
 permissions:
